@@ -1,90 +1,55 @@
 #!/usr/bin/env bash
-set -o errexit
-set -o pipefail
+# Flush DNS Cache Script for macOS
+# This script clears the DNS resolver cache, useful when DNS changes don't take effect immediately
 
-#------------------------------------------------------------------
-# this script MUST be run as root. If they're not root (EUID of 0),
-# recursively invoke ourselv with sudo(1).
-#------------------------------------------------------------------
-if [ $EUID -ne 0 ]; then
-    sudo "$0" $@
-    exit
-fi;
+# Exit on error, undefined variables, and pipe failures
+set -euo pipefail
 
-#------------------------------------------------------------------
-# if we get here, we're running as root
-#------------------------------------------------------------------
+# Check if running as root; if not, re-execute with sudo
+if [[ ${EUID:-$(id -euid)} -ne 0 ]]; then
+    exec sudo "$0" "$@"
+fi
 
-fail() {
-    echo ERROR: $*
-    return 1
-}
-
-is_darwin() {
-    local -r system_name=`uname -s`
-
-    if [ "$system_name" == 'Darwin' ];
-    then return 0;
-    else return 1;
-    fi;
-
-}
-
-is_osx() {
-    local -r os_name=`sw_vers -productName`
-
-    if [ "$os_name" == 'Mac OS X' ];
-    then return 0;
-    else return 1;
-    fi;
-
-}
-
+# Main function that performs the DNS cache flush
 main() {
+    # Get the macOS version from system_profiler
+    local osx_version
+    osx_version=$(sw_vers -productVersion)
+    # Extract the major version number (e.g., 10, 11, 12, etc.)
+    local major_version
+    major_version=${osx_version%%.*}
 
-    # if this isn't Darwin, no point in continuing
-    if ! is_darwin; then
-        fail "System is not OS X";
-    fi;
+    echo "Flushing DNS Cache for macOS ${osx_version} ..."
 
-    if ! is_osx; then
-        fail "System is not OS X";
-    fi;
-
-    local -r osx_version=`sw_vers -productVersion`;
-
-    echo "Flushing DNS Cache for OSX v${osx_version} ..."
-
-    case "$osx_version" in
-    10.[34].*) # Panther, Tiger
-        lookupd -flushcache
-        ;;
-    10.[56].*) # Leopard, Snow Leopard
-        dscacheutil -flushcache
-        ;;
-    10.[789].*) # OS X Lion, Mountain Lion and Mavericks
-        dscacheutil -flushcache
-        killall -HUP mDNSResponder
-        ;;
-    10.10.[0123]) # OS X Yosemite
-        discoveryutil mdnsflushcache
-        discoveryutil udnsflushcache
-        ;;
-    10.10.[45]) # OS X Yosemite
-        dscacheutil -flushcache
-        killall -HUP mDNSResponder
-        ;;
-    10.1[12345].*) # OS X El Capitan, MacOS Sierra, High Sierra, Mojave and Catalina
-        dscacheutil -flushcache
-        killall -HUP mDNSResponder
-        ;;
-    *)
-        fail "${osx_version}: Unknown OS X version"
-        ;;
+    # Validate that the macOS version is supported
+    case ${major_version} in
+        10)
+            # For macOS 10.x (El Capitan and later), extract minor version
+            local minor_version
+            minor_version=${osx_version#10.}
+            minor_version=${minor_version%.*}
+            # Ensure version is 10.10 (Yosemite) or later
+            if (( minor_version < 10 )); then
+                echo "ERROR: ${osx_version}: Unsupported macOS version (10.10+ required)"
+                return 1
+            fi
+            ;;
+        11 | 12 | 13 | 14 | 15 | 16)
+            # macOS Big Sur (11), Monterey (12), Ventura (13), Sonoma (14), Sequoia (15), and future versions
+            ;;
+        *)
+            echo "ERROR: ${osx_version}: Unsupported macOS version"
+            return 1
+            ;;
     esac
 
-    echo "...flushed"
+    # Flush the DNS cache using dscacheutil
+    dscacheutil -flushcache
+    # Restart the mDNSResponder to ensure changes take effect
+    killall -HUP mDNSResponder
 
+    echo "DNS cache flushed successfully"
 }
 
-main $@;
+# Execute main function with all provided arguments
+main "$@"
